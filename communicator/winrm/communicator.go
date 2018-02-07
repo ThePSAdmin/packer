@@ -128,12 +128,10 @@ func (c *Communicator) Upload(path string, input io.Reader, fi *os.FileInfo) err
 		return err
 	}
 
-	// Get information about destination path
-	endpoint := winrm.NewEndpoint(c.endpoint.Host, c.endpoint.Port, c.config.Https, c.config.Insecure, nil, nil, nil, c.config.Timeout)
-	client, err := winrm.NewClient(endpoint, c.config.Username, c.config.Password)
 	if err != nil {
 		return fmt.Errorf("Was unable to create winrm client: %s", err)
 	}
+	client, err := c.newWinRMClient()
 	stdout, _, _, err := client.RunWithString(fmt.Sprintf("powershell -Command \"(Get-Item %s) -is [System.IO.DirectoryInfo]\"", path), "")
 	if err != nil {
 		return fmt.Errorf("Couldn't determine whether destination was a folder or file: %s", err)
@@ -162,8 +160,7 @@ func (c *Communicator) UploadDir(dst string, src string, exclude []string) error
 }
 
 func (c *Communicator) Download(src string, dst io.Writer) error {
-	endpoint := winrm.NewEndpoint(c.endpoint.Host, c.endpoint.Port, c.config.Https, c.config.Insecure, nil, nil, nil, c.config.Timeout)
-	client, err := winrm.NewClient(endpoint, c.config.Username, c.config.Password)
+	client, err := c.newWinRMClient()
 	if err != nil {
 		return err
 	}
@@ -195,6 +192,45 @@ func (c *Communicator) newCopyClient() (*winrmcp.Winrmcp, error) {
 		MaxOperationsPerShell: 15, // lowest common denominator
 		TransportDecorator:    c.config.TransportDecorator,
 	})
+}
+
+func (c *Communicator) newWinRMClient() (*winrm.Client, error) {
+	// shamelessly borrowed from the winrmcp client.
+	var endpoint *winrm.Endpoint
+	conf := &winrmcp.Config{
+		Auth: winrmcp.Auth{
+			User:     c.config.Username,
+			Password: c.config.Password,
+		},
+		Https:                 c.config.Https,
+		Insecure:              c.config.Insecure,
+		OperationTimeout:      c.config.Timeout,
+		MaxOperationsPerShell: 15, // lowest common denominator
+		TransportDecorator:    c.config.TransportDecorator,
+	}
+
+	endpoint = &winrm.Endpoint{
+		Host:          c.endpoint.Host,
+		Port:          c.endpoint.Port,
+		HTTPS:         conf.Https,
+		Insecure:      conf.Insecure,
+		TLSServerName: conf.TLSServerName,
+		CACert:        conf.CACertBytes,
+		Timeout:       conf.ConnectTimeout,
+	}
+	params := winrm.NewParameters(
+		winrm.DefaultParameters.Timeout,
+		winrm.DefaultParameters.Locale,
+		winrm.DefaultParameters.EnvelopeSize,
+	)
+
+	if conf.TransportDecorator != nil {
+		params.TransportDecorator = conf.TransportDecorator
+	}
+	params.Timeout = "PT3M"
+	client, err := winrm.NewClientWithParameters(
+		endpoint, conf.Auth.User, conf.Auth.Password, params)
+	return client, err
 }
 
 type Base64Pipe struct {
